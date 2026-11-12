@@ -221,6 +221,19 @@
             <h2>{{ comms.title }}</h2>
           </div>
         </div>
+        <p class="hint">قيّم مستواك في القراءة والكتابة. هذا التقييم مطلوب.</p>
+        <div class="skills">
+          {% for key, label in lang_skills %}
+          <fieldset class="skill-row">
+            <legend>{{ label }} *</legend>
+            <div class="pills wrap" role="radiogroup">
+              {% for lkey, llabel in lang_levels %}
+              <label class="pill"><input type="radio" name="{{ key }}" value="{{ lkey }}" required {% if form.get(key)==lkey %}checked{% endif %}> {{ llabel }}</label>
+              {% endfor %}
+            </div>
+          </fieldset>
+          {% endfor %}
+        </div>
         <div class="skills">
           {% for key, label in comms.questions %}
           <fieldset class="skill-row">

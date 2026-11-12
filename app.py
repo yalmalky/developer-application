@@ -175,6 +175,18 @@ HOUSING = [
     ("needs", "أحتاج سكنًا توفّره الشركة"),
     ("has", "لديّ سكن ولا أحتاج"),
 ]
+LANG_LEVELS = [
+    ("excellent", "ممتاز"),
+    ("very_good", "جيد جدًا"),
+    ("good", "جيد"),
+    ("weak", "ضعيف"),
+]
+LANG_SKILLS = [
+    ("lang_ar_reading", "العربية — القراءة"),
+    ("lang_ar_writing", "العربية — الكتابة"),
+    ("lang_en_reading", "الإنجليزية — القراءة"),
+    ("lang_en_writing", "الإنجليزية — الكتابة"),
+]
 
 
 def _now() -> datetime:
@@ -393,6 +405,14 @@ def collect_errors(form, files) -> tuple[list[str], dict[str, Any] | None]:
     if housing not in {k for k, _ in HOUSING}:
         errors.append("حدد وضع السكن.")
 
+    languages: dict[str, str] = {}
+    for key, _label in LANG_SKILLS:
+        val = clean(form.get(key))
+        if val not in {k for k, _ in LANG_LEVELS}:
+            errors.append("قيّم مستواك في القراءة والكتابة بالعربية والإنجليزية.")
+            break
+        languages[key] = val
+
     tech: dict[str, str] = {}
     for key, label in TECH_QUESTIONS:
         val = clean(form.get(key))
@@ -460,6 +480,7 @@ def collect_errors(form, files) -> tuple[list[str], dict[str, Any] | None]:
             "salary_exact_sar": int(salary_exact),
             "housing": housing,
         },
+        "languages": languages,
         "technical": tech,
         "declaration": True,
         "cv": {"filename": cv_name, "type": cv_kind, "size_bytes": len(cv_bytes)},
@@ -477,6 +498,8 @@ def inject_globals():
         "response_times": RESPONSE_TIMES,
         "work_modes": WORK_MODES,
         "housing_options": HOUSING,
+        "lang_levels": LANG_LEVELS,
+        "lang_skills": LANG_SKILLS,
         "role_labels": ROLE_LABELS,
         "min_tech": MIN_TECH,
         "min_evidence": MIN_EVIDENCE,
