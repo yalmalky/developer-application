@@ -243,6 +243,65 @@ def issue_csrf() -> str:
     return _csrf_serializer().dumps({"n": secrets.token_urlsafe(8)})
 
 
+# One-time submission token: a repeated POST with the same token must not
+# create a second application folder (double-tap, browser retry, or Enter twice).
+USED_TOKEN_DIR = DATA_ROOT / "used-submit-tokens"
+_submit_token_lock = threading.Lock()
+_used_submit_tokens: set[str] = set()
+_inflight_submit_tokens: set[str] = set()
+
+
+def _submit_serializer() -> URLSafeTimedSerializer:
+    return URLSafeTimedSerializer(app.config["SECRET_KEY"], salt="apply-form-submit")
+
+
+def issue_submit_token() -> str:
+    return _submit_serializer().dumps({"n": secrets.token_urlsafe(16)})
+
+
+def _submit_token_id(token: str | None) -> str | None:
+    if not token:
+        return None
+    try:
+        data = _submit_serializer().loads(str(token), max_age=CSRF_MAX_AGE)
+    except (BadSignature, SignatureExpired):
+        return None
+    nonce = data.get("n") if isinstance(data, dict) else None
+    if isinstance(nonce, str) and 8 <= len(nonce) <= 64 and re.fullmatch(r"[A-Za-z0-9_-]+", nonce):
+        return nonce
+    return None
+
+
+def _used_token_path(tid: str) -> Path:
+    return USED_TOKEN_DIR / f"{tid}.used"
+
+
+def _submit_token_used(tid: str) -> bool:
+    if tid in _used_submit_tokens:
+        return True
+    try:
+        return _used_token_path(tid).is_file()
+    except Exception:
+        return False
+
+
+def _mark_submit_token_used(tid: str) -> None:
+    _used_submit_tokens.add(tid)
+    try:
+        USED_TOKEN_DIR.mkdir(parents=True, exist_ok=True)
+        _used_token_path(tid).write_text("1", encoding="utf-8")
+    except Exception:
+        log.warning("could not persist used submit token")
+
+
+def _unmark_submit_token(tid: str) -> None:
+    _used_submit_tokens.discard(tid)
+    try:
+        _used_token_path(tid).unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
 def _same_origin() -> bool:
     host = request.host
     for header in ("Origin", "Referer"):
@@ -613,7 +672,9 @@ def security_headers(resp):
 
 
 @app.get("/health")
+@app.get("/healthz")
 def health():
+    # Lightweight liveness probe for keep-alive pings and in-form warmup.
     return {"ok": True}, 200
 
 
@@ -624,8 +685,14 @@ def robots():
 
 @app.get("/")
 def form_get():
-    token = issue_csrf()
-    return render_template("form.html", csrf_token=token, errors=[], form={}, project_count=1)
+    return render_template(
+        "form.html",
+        csrf_token=issue_csrf(),
+        submit_token=issue_submit_token(),
+        errors=[],
+        form={},
+        project_count=1,
+    )
 
 
 @app.get("/shukran")
@@ -640,6 +707,7 @@ def _render_form(errors: list[str], status: int, form=None, stash: str = "", sta
     return render_template(
         "form.html",
         csrf_token=issue_csrf(),
+        submit_token=issue_submit_token(),
         errors=errors,
         form=form,
         project_count=_safe_count(form) if form else 1,
@@ -690,6 +758,42 @@ def form_post():
         return _render_form(errors, 400, request.form, stash, stash_name)
 
     assert parsed is not None
+
+    tid = _submit_token_id(request.form.get("submit_token"))
+    if tid:
+        wait_for_twin = False
+        with _submit_token_lock:
+            if _submit_token_used(tid):
+                log.info("duplicate submit token; not creating another folder")
+                session["submitted"] = True
+                return redirect(url_for("thanks"))
+            if tid in _inflight_submit_tokens:
+                wait_for_twin = True
+            else:
+                _inflight_submit_tokens.add(tid)
+        if wait_for_twin:
+            deadline = time.time() + 90
+            while time.time() < deadline:
+                time.sleep(0.25)
+                with _submit_token_lock:
+                    if _submit_token_used(tid):
+                        session["submitted"] = True
+                        return redirect(url_for("thanks"))
+                    if tid not in _inflight_submit_tokens:
+                        break
+            stash, stash_name = _keep_cv(parsed)
+            with _submit_token_lock:
+                if _submit_token_used(tid):
+                    session["submitted"] = True
+                    return redirect(url_for("thanks"))
+            return _render_form(
+                ["تعذّر تأكيد حفظ الطلب. إجاباتك وسيرتك محفوظة؛ اضغط «إرسال الطلب» مرة ثانية فقط."],
+                503,
+                request.form,
+                stash,
+                stash_name,
+            )
+
     payload = parsed["payload"]
     stamp = _now().strftime("%Y%m%d-%H%M%S")
     folder = f"{stamp}-{secrets.token_hex(2)}-{slugify_name(payload['full_name'])}"
@@ -701,12 +805,19 @@ def form_post():
     json_text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
     ext = Path(parsed["cv_name"]).suffix.lower() or ".bin"
     stored_cv_name = f"cv{ext}"
+    stored = False
     try:
         save_submission(folder, json_text, parsed["cv_bytes"], stored_cv_name)
         log.info("stored submission %s", folder)
+        stored = True
     except Exception:
         log.exception("storage failed for %s; queuing locally", folder)
-        if not queue_pending(folder, json_text, parsed["cv_bytes"], stored_cv_name):
+        if queue_pending(folder, json_text, parsed["cv_bytes"], stored_cv_name):
+            stored = True
+        else:
+            if tid:
+                with _submit_token_lock:
+                    _inflight_submit_tokens.discard(tid)
             stash, stash_name = _keep_cv(parsed)
             return _render_form(
                 ["تعذّر حفظ الطلب الآن بسبب مشكلة مؤقتة عندنا. إجاباتك وسيرتك محفوظة أدناه؛ اضغط «إرسال الطلب» مرة ثانية بعد دقيقة."],
@@ -715,6 +826,11 @@ def form_post():
                 stash,
                 stash_name,
             )
+
+    if tid and stored:
+        with _submit_token_lock:
+            _mark_submit_token_used(tid)
+            _inflight_submit_tokens.discard(tid)
 
     drop_stash(clean(request.form.get("cv_stash")))
     rate_hit(ip)

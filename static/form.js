@@ -1,4 +1,5 @@
 (function () {
+  /* form.js submit-v2: healthz warmup, loading overlay, single submit */
   const root = document.getElementById("projects");
   const countInput = document.getElementById("project_count");
   const addBtn = document.getElementById("add-project");
@@ -134,7 +135,7 @@
     catch (e) { return null; }
   }
   const ls = storage();
-  const SKIP = { csrf_token: 1, cv_stash: 1, website: 1, fax_number: 1, cv: 1 };
+  const SKIP = { csrf_token: 1, submit_token: 1, cv_stash: 1, website: 1, fax_number: 1, cv: 1 };
 
   function snapshot() {
     const data = {};
@@ -244,35 +245,92 @@
   }
 
   let sending = false;
+  let nativeSend = false;
+  const overlay = document.getElementById("submit-overlay");
+  const SUBMIT_MSG = "جاري إرسال طلبك… لا تغلق الصفحة";
+
+  function pingHealth() {
+    return fetch("/healthz", { method: "GET", cache: "no-store", credentials: "same-origin" })
+      .then(function (r) { return !!r.ok; })
+      .catch(function () { return false; });
+  }
+  // Quietly wake the server while the candidate fills the form, so submit
+  // does not hit Render's sleeping-instance page.
+  pingHealth();
+  setInterval(function () {
+    if (!document.hidden) pingHealth();
+  }, 5 * 60 * 1000);
+
+  function showSending() {
+    sending = true;
+    submitBtn.disabled = true;
+    submitBtn.setAttribute("aria-busy", "true");
+    submitBtn.textContent = SUBMIT_MSG;
+    if (status) status.textContent = SUBMIT_MSG;
+    if (overlay) overlay.hidden = false;
+    form.setAttribute("aria-busy", "true");
+  }
+  function hideSending() {
+    sending = false;
+    nativeSend = false;
+    submitBtn.disabled = false;
+    submitBtn.removeAttribute("aria-busy");
+    submitBtn.textContent = "إرسال الطلب";
+    if (overlay) overlay.hidden = true;
+    form.removeAttribute("aria-busy");
+  }
+
+  function showCheckErrors(r) {
+    const ul = clientErr.querySelector("ul");
+    ul.innerHTML = "";
+    r.problems.slice(0, 12).forEach(function (m) { const li = document.createElement("li"); li.textContent = m; ul.appendChild(li); });
+    if (r.problems.length > 12) { const li = document.createElement("li"); li.textContent = "و" + (r.problems.length - 12) + " بنود أخرى مظللة بالأحمر."; ul.appendChild(li); }
+    clientErr.hidden = false;
+    (r.firstBad || clientErr).scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+
   form.addEventListener("submit", function (ev) {
-    if (sending) { ev.preventDefault(); return; }
+    if (nativeSend) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    if (sending) return;
     const r = check();
     if (r.problems.length) {
-      ev.preventDefault();
-      const ul = clientErr.querySelector("ul");
-      ul.innerHTML = "";
-      r.problems.slice(0, 12).forEach(function (m) { const li = document.createElement("li"); li.textContent = m; ul.appendChild(li); });
-      if (r.problems.length > 12) { const li = document.createElement("li"); li.textContent = "و" + (r.problems.length - 12) + " بنود أخرى مظللة بالأحمر."; ul.appendChild(li); }
-      clientErr.hidden = false;
-      (r.firstBad || clientErr).scrollIntoView({ behavior: "smooth", block: "center" });
+      showCheckErrors(r);
       return;
     }
     if (navigator.onLine === false) {
-      ev.preventDefault();
       if (status) status.textContent = "ما فيه اتصال بالإنترنت الآن. إجاباتك محفوظة؛ أرسل لما يرجع الاتصال.";
       return;
     }
     clientErr.hidden = true;
     saveDraft();
-    sending = true;
-    submitBtn.disabled = true;
-    submitBtn.textContent = "جارٍ الإرسال…";
-    if (status) status.textContent = "جارٍ رفع طلبك والسيرة الذاتية. قد يستغرق دقيقة، لا تغلق الصفحة.";
-  });
+    showSending();
+    const started = Date.now();
+    function waitAwake() {
+      if (!sending) return;
+      pingHealth().then(function (ok) {
+        if (!sending) return;
+        if (ok) {
+          nativeSend = true;
+          HTMLFormElement.prototype.submit.call(form);
+          return;
+        }
+        if (Date.now() - started > 90000) {
+          hideSending();
+          if (status) status.textContent = "الخادم يستيقظ الآن. لا تغلق الصفحة؛ اضغط «إرسال الطلب» مرة ثانية بعد لحظات.";
+          return;
+        }
+        setTimeout(waitAwake, 2000);
+      });
+    }
+    waitAwake();
+  }, true);
+
   // If the user comes back (back button / bfcache), make the button usable again.
   window.addEventListener("pageshow", function () {
-    sending = false;
-    submitBtn.disabled = false;
+    hideSending();
+    if (status) status.textContent = "";
     submitBtn.textContent = "إرسال الطلب";
   });
 

@@ -1,0 +1,43 @@
+# Keep-alive ping for https://developer-application.onrender.com/healthz
+#
+# This workspace has four free Render web services sharing 750 instance
+# hours/month: developer-application, wesh-arkhas, triage-one, and dalla3-api.
+# One always-on service needs 24×30 = 720 hours (744 in a 31-day month).
+# wesh-arkhas is already pinged ~20 hours/day (≈600–620 hours/month).
+# Scheduling this workflow every 10 minutes would keep this service up
+# 24/7 and push the account over the free-hour cap, so the cron is left
+# commented. Wake the service instead from the form (page-open and
+# every 5 minutes while the tab is open). Use workflow_dispatch to ping
+# manually. Uncomment the schedule only if the other free services are
+# upgraded or retired.
+#
+# GitHub cron can also lag past Render's 15-minute sleep window, which
+# is another reason the in-form pings are the primary keep-alive.
+name: keep-alive
+on:
+  workflow_dispatch:
+  # schedule:
+  #   - cron: '*/10 * * * *'
+permissions:
+  contents: read
+concurrency:
+  group: keep-alive
+  cancel-in-progress: true
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Ping /healthz
+        run: |
+          for i in 1 2 3 4 5; do
+            code=$(curl -sS -o /tmp/h.json -w '%{http_code}' -m 90 https://developer-application.onrender.com/healthz) || true
+            echo "try $i -> $code"
+            if [ "$code" = "200" ]; then
+              cat /tmp/h.json
+              echo
+              exit 0
+            fi
+            sleep 10
+          done
+          exit 1

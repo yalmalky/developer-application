@@ -52,6 +52,7 @@
 
     <form method="post" action="/" enctype="multipart/form-data" novalidate id="apply-form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="submit_token" value="{{ submit_token }}">
       <input type="hidden" name="cv_stash" id="cv_stash" value="{{ cv_stash }}">
       <!-- Honeypot fields: must stay empty -->
       <div class="hp" aria-hidden="true">
@@ -290,6 +291,12 @@
         <p class="hint" id="submit-status" aria-live="polite"></p>
       </section>
     </form>
+    <div id="submit-overlay" hidden>
+      <div class="submit-overlay-box" role="status" aria-live="assertive" aria-busy="true">
+        <span class="spinner" aria-hidden="true"></span>
+        <p>جاري إرسال طلبك… لا تغلق الصفحة</p>
+      </div>
+    </div>
 
     <footer class="foot">جميع الحقول المعلّمة بـ * مطلوبة.</footer>
   </div>
