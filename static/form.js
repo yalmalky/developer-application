@@ -73,14 +73,25 @@
     return root.querySelectorAll(".project").length;
   }
 
-  function render(n) {
-    n = Math.min(Math.max(n, 1), 5);
-    const html = [];
-    for (let i = 1; i <= n; i += 1) html.push(projectHtml(i));
-    root.innerHTML = html.join("");
+  function syncControls() {
+    const n = currentCount();
     countInput.value = String(n);
     addBtn.disabled = n >= 5;
     removeBtn.disabled = n <= 1;
+  }
+
+  // Add or remove blocks one at a time so the fields a candidate already
+  // typed in earlier projects are never rebuilt (and wiped).
+  function render(n) {
+    n = Math.min(Math.max(n, 1), 5);
+    while (currentCount() < n) {
+      root.insertAdjacentHTML("beforeend", projectHtml(currentCount() + 1));
+    }
+    while (currentCount() > n) {
+      const blocks = root.querySelectorAll(".project");
+      blocks[blocks.length - 1].remove();
+    }
+    syncControls();
   }
 
   const start = posted ? parseInt(posted.getAttribute("data-count") || "1", 10) : 1;
