@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import base64
 import json
+import logging
 import os
 import re
 import secrets
+import shutil
+import threading
 import time
 from collections import defaultdict, deque
 from datetime import datetime, timezone, timedelta
@@ -23,17 +27,33 @@ from flask import (
     url_for,
 )
 
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
+from werkzeug.exceptions import RequestEntityTooLarge
+
 from store import StorageError, save_submission
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY") or secrets.token_hex(32)
-app.config["MAX_CONTENT_LENGTH"] = 12 * 1024 * 1024
+# Whole request (CV + all answers). CV itself is capped at MAX_CV_BYTES below.
+app.config["MAX_CONTENT_LENGTH"] = 40 * 1024 * 1024
+# Werkzeug 3.1 caps each non-file field at 500 KB by default; long answers must never hit that.
+app.config["MAX_FORM_MEMORY_SIZE"] = 4 * 1024 * 1024
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 app.config["SESSION_COOKIE_SECURE"] = os.environ.get("FLASK_ENV") != "development"
 
 RIYADH = timezone(timedelta(hours=3))
-MAX_CV_BYTES = 10 * 1024 * 1024
+MAX_CV_BYTES = 25 * 1024 * 1024
+MAX_CV_MB = MAX_CV_BYTES // (1024 * 1024)
+CSRF_MAX_AGE = 3 * 24 * 3600  # a long, slow fill must never expire the page
+DATA_ROOT = Path(os.environ.get("APP_DATA_DIR", "/tmp/developer-application"))
+STASH_DIR = DATA_ROOT / "cv-stash"
+PENDING_DIR = DATA_ROOT / "pending"
+STASH_MAX_AGE = 2 * 24 * 3600
+RETRY_EVERY = 120
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+log = logging.getLogger("developer-application")
 ALLOWED_CV = {
     ".pdf": "pdf",
     ".doc": "doc",
@@ -213,17 +233,36 @@ def rate_hit(ip: str) -> None:
     _RATE[ip].append(time.time())
 
 
+def _csrf_serializer() -> URLSafeTimedSerializer:
+    return URLSafeTimedSerializer(app.config["SECRET_KEY"], salt="apply-form-csrf")
+
+
 def issue_csrf() -> str:
-    token = secrets.token_urlsafe(32)
-    session["csrf"] = token
-    return token
+    # Stateless signed token: valid in any number of tabs, survives reloads,
+    # server restarts and cookie loss. Not tied to the session.
+    return _csrf_serializer().dumps({"n": secrets.token_urlsafe(8)})
+
+
+def _same_origin() -> bool:
+    host = request.host
+    for header in ("Origin", "Referer"):
+        val = request.headers.get(header, "")
+        if val and val != "null":
+            m = re.match(r"^https?://([^/]+)", val)
+            return bool(m) and m.group(1) == host
+    return False
 
 
 def valid_csrf(token: str | None) -> bool:
-    expected = session.get("csrf")
-    if not token or not expected:
-        return False
-    return secrets.compare_digest(str(token), str(expected))
+    if token:
+        try:
+            _csrf_serializer().loads(str(token), max_age=CSRF_MAX_AGE)
+            return True
+        except (BadSignature, SignatureExpired):
+            pass
+    # Fallback: a same-origin browser POST is not a CSRF attack. This keeps a
+    # candidate who filled the form for hours from being rejected.
+    return _same_origin()
 
 
 def clean(value: Any) -> str:
@@ -275,6 +314,68 @@ def detect_cv(filename: str, data: bytes) -> str | None:
             return None
         return None
     return None
+
+
+_STASH_RE = re.compile(r"^[A-Za-z0-9_-]{20,64}$")
+
+
+def stash_cv(cv_bytes: bytes, cv_name: str, cv_kind: str) -> str | None:
+    """Keep an already-uploaded valid CV so a candidate never has to re-attach it."""
+    try:
+        STASH_DIR.mkdir(parents=True, exist_ok=True)
+        token = secrets.token_urlsafe(24)
+        (STASH_DIR / f"{token}.bin").write_bytes(cv_bytes)
+        (STASH_DIR / f"{token}.json").write_text(
+            json.dumps({"name": cv_name, "kind": cv_kind, "t": time.time()}), encoding="utf-8"
+        )
+        return token
+    except Exception:
+        log.exception("could not stash cv")
+        return None
+
+
+def load_stash(token: str) -> tuple[bytes, str, str] | None:
+    if not token or not _STASH_RE.match(token):
+        return None
+    try:
+        meta = json.loads((STASH_DIR / f"{token}.json").read_text(encoding="utf-8"))
+        data = (STASH_DIR / f"{token}.bin").read_bytes()
+        if time.time() - float(meta.get("t", 0)) > STASH_MAX_AGE:
+            return None
+        return data, meta["name"], meta["kind"]
+    except Exception:
+        return None
+
+
+def drop_stash(token: str) -> None:
+    if token and _STASH_RE.match(token):
+        for ext in (".bin", ".json"):
+            try:
+                (STASH_DIR / f"{token}{ext}").unlink()
+            except FileNotFoundError:
+                pass
+
+
+def resolve_cv(form, files) -> tuple[bytes, str, str | None, str | None]:
+    cv = files.get("cv")
+    if cv is not None and getattr(cv, "filename", None):
+        cv_name = Path(cv.filename).name
+        try:
+            cv_bytes = cv.read()
+        except Exception:
+            cv_bytes = b""
+        if len(cv_bytes) == 0:
+            return b"", cv_name, None, "ملف السيرة الذاتية فارغ. اختر الملف مرة ثانية."
+        if len(cv_bytes) > MAX_CV_BYTES:
+            return b"", cv_name, None, f"حجم السيرة الذاتية يتجاوز {MAX_CV_MB} ميغابايت. ارفع نسخة أصغر (مثلًا PDF مضغوط)."
+        kind = detect_cv(cv_name, cv_bytes)
+        if not kind:
+            return b"", cv_name, None, "صيغة السيرة الذاتية غير مدعومة. ارفع ملف PDF أو DOC أو DOCX."
+        return cv_bytes, cv_name, kind, None
+    stashed = load_stash(clean(form.get("cv_stash")))
+    if stashed:
+        return stashed[0], stashed[1], stashed[2], None
+    return b"", "", None, "إرفاق السيرة الذاتية إلزامي (PDF أو Word)."
 
 
 def parse_projects(form) -> tuple[list[dict], str | None]:
@@ -424,26 +525,9 @@ def collect_errors(form, files) -> tuple[list[str], dict[str, Any] | None]:
     if clean(form.get("declaration")) != "yes":
         errors.append("يلزم الإقرار بأن المعلومات صحيحة قبل الإرسال.")
 
-    cv = files.get("cv")
-    cv_bytes = b""
-    cv_name = ""
-    cv_kind = None
-    if cv is None or not getattr(cv, "filename", None):
-        errors.append("إرفاق السيرة الذاتية إلزامي (PDF أو Word).")
-    else:
-        cv_name = Path(cv.filename).name
-        try:
-            cv_bytes = cv.read()
-        except Exception:
-            cv_bytes = b""
-        if len(cv_bytes) == 0:
-            errors.append("ملف السيرة الذاتية فارغ.")
-        elif len(cv_bytes) > MAX_CV_BYTES:
-            errors.append("حجم السيرة الذاتية يتجاوز 10 ميغابايت.")
-        else:
-            cv_kind = detect_cv(cv_name, cv_bytes)
-            if not cv_kind:
-                errors.append("صيغة السيرة الذاتية غير مدعومة. ارفع ملف PDF أو DOC أو DOCX.")
+    cv_bytes, cv_name, cv_kind, cv_err = resolve_cv(form, files)
+    if cv_err:
+        errors.append(cv_err)
 
     # De-duplicate while preserving order
     seen = set()
@@ -454,7 +538,7 @@ def collect_errors(form, files) -> tuple[list[str], dict[str, Any] | None]:
             uniq.append(e)
 
     if uniq:
-        return uniq, None
+        return uniq, {"cv_bytes": cv_bytes, "cv_name": cv_name, "cv_kind": cv_kind}
 
     payload = {
         "submitted_at": _now().isoformat(timespec="seconds"),
@@ -503,6 +587,9 @@ def inject_globals():
         "role_labels": ROLE_LABELS,
         "min_tech": MIN_TECH,
         "min_evidence": MIN_EVIDENCE,
+        "max_cv_mb": MAX_CV_MB,
+        "cv_stash": "",
+        "cv_stash_name": "",
     }
 
 
@@ -548,6 +635,31 @@ def thanks():
     return render_template("success.html")
 
 
+def _render_form(errors: list[str], status: int, form=None, stash: str = "", stash_name: str = ""):
+    form = form if form is not None else {}
+    return render_template(
+        "form.html",
+        csrf_token=issue_csrf(),
+        errors=errors,
+        form=form,
+        project_count=_safe_count(form) if form else 1,
+        cv_stash=stash,
+        cv_stash_name=stash_name,
+    ), status
+
+
+def _keep_cv(parsed) -> tuple[str, str]:
+    """Return (stash_token, filename) for a CV the candidate already uploaded."""
+    if not parsed or not parsed.get("cv_kind"):
+        return "", ""
+    prev = clean(request.form.get("cv_stash"))
+    if prev and not (request.files.get("cv") and request.files["cv"].filename):
+        if load_stash(prev):
+            return prev, parsed["cv_name"]
+    tok = stash_cv(parsed["cv_bytes"], parsed["cv_name"], parsed["cv_kind"])
+    return (tok, parsed["cv_name"]) if tok else ("", "")
+
+
 @app.post("/")
 def form_post():
     # Honeypot: look like success, store nothing.
@@ -556,41 +668,31 @@ def form_post():
         return redirect(url_for("thanks"))
 
     if not valid_csrf(request.form.get("csrf_token")):
-        token = issue_csrf()
-        return render_template(
-            "form.html",
-            csrf_token=token,
-            errors=["انتهت صلاحية الصفحة. حدّث الصفحة وأعد الإرسال."],
-            form=request.form,
-            project_count=_safe_count(request.form),
-        ), 400
+        log.warning("csrf rejected (no valid token, cross-origin)")
+        return _render_form(
+            ["تعذّر التحقق من الصفحة. إجاباتك محفوظة أدناه؛ اضغط «إرسال الطلب» مرة ثانية فقط (لا تحدّث الصفحة)."],
+            400,
+            request.form,
+        )
 
     ip = client_ip()
     if rate_limited(ip):
-        token = issue_csrf()
-        return render_template(
-            "form.html",
-            csrf_token=token,
-            errors=["حاولت الإرسال مرات كثيرة. انتظر قليلًا ثم أعد المحاولة."],
-            form=request.form,
-            project_count=_safe_count(request.form),
-        ), 429
+        return _render_form(
+            ["حاولت الإرسال مرات كثيرة. إجاباتك محفوظة؛ انتظر قليلًا ثم اضغط «إرسال الطلب» مرة ثانية."],
+            429,
+            request.form,
+        )
 
     errors, parsed = collect_errors(request.form, request.files)
     if errors:
-        token = issue_csrf()
-        return render_template(
-            "form.html",
-            csrf_token=token,
-            errors=errors,
-            form=request.form,
-            project_count=_safe_count(request.form),
-        ), 400
+        log.info("validation failed: %d issue(s)", len(errors))
+        stash, stash_name = _keep_cv(parsed)
+        return _render_form(errors, 400, request.form, stash, stash_name)
 
     assert parsed is not None
     payload = parsed["payload"]
     stamp = _now().strftime("%Y%m%d-%H%M%S")
-    folder = f"{stamp}-{slugify_name(payload['full_name'])}"
+    folder = f"{stamp}-{secrets.token_hex(2)}-{slugify_name(payload['full_name'])}"
     # Keep test submissions easy to spot and clean up.
     if payload["full_name"].upper().startswith("TEST") or "اختبار" in payload["full_name"]:
         folder = f"TEST-{folder}"
@@ -601,21 +703,94 @@ def form_post():
     stored_cv_name = f"cv{ext}"
     try:
         save_submission(folder, json_text, parsed["cv_bytes"], stored_cv_name)
-    except StorageError:
-        app.logger.exception("storage failed")
-        token = issue_csrf()
-        return render_template(
-            "form.html",
-            csrf_token=token,
-            errors=["تعذّر حفظ الطلب الآن. حاول مرة أخرى بعد دقيقة، وإن تكرر الأمر راسلنا."],
-            form=request.form,
-            project_count=_safe_count(request.form),
-        ), 503
+        log.info("stored submission %s", folder)
+    except Exception:
+        log.exception("storage failed for %s; queuing locally", folder)
+        if not queue_pending(folder, json_text, parsed["cv_bytes"], stored_cv_name):
+            stash, stash_name = _keep_cv(parsed)
+            return _render_form(
+                ["تعذّر حفظ الطلب الآن بسبب مشكلة مؤقتة عندنا. إجاباتك وسيرتك محفوظة أدناه؛ اضغط «إرسال الطلب» مرة ثانية بعد دقيقة."],
+                503,
+                request.form,
+                stash,
+                stash_name,
+            )
 
+    drop_stash(clean(request.form.get("cv_stash")))
     rate_hit(ip)
     session["submitted"] = True
-    session.pop("csrf", None)
     return redirect(url_for("thanks"))
+
+
+# ---------- server-side fallback: nothing is lost if GitHub is unreachable ----------
+_pending_lock = threading.Lock()
+
+
+def queue_pending(folder: str, json_text: str, cv_bytes: bytes, cv_name: str) -> bool:
+    try:
+        dest = PENDING_DIR / folder
+        dest.mkdir(parents=True, exist_ok=True)
+        (dest / "application.json").write_text(json_text, encoding="utf-8")
+        (dest / "cv.name").write_text(cv_name, encoding="utf-8")
+        (dest / "cv.bin").write_bytes(cv_bytes)
+    except Exception:
+        log.exception("could not queue pending %s", folder)
+        return False
+    # Last resort if the instance restarts before the retry succeeds (/tmp is
+    # ephemeral on Render): keep the answers (not the CV) in the private service log.
+    try:
+        b64 = base64.b64encode(json_text.encode("utf-8")).decode("ascii")
+        log.warning("PENDING_SUBMISSION folder=%s json_b64=%s", folder, b64)
+    except Exception:
+        pass
+    threading.Thread(target=flush_pending, daemon=True).start()
+    return True
+
+
+def flush_pending() -> None:
+    if not _pending_lock.acquire(blocking=False):
+        return
+    try:
+        if not PENDING_DIR.exists():
+            return
+        for dest in sorted(PENDING_DIR.iterdir()):
+            try:
+                json_text = (dest / "application.json").read_text(encoding="utf-8")
+                cv_name = (dest / "cv.name").read_text(encoding="utf-8")
+                cv_bytes = (dest / "cv.bin").read_bytes()
+                save_submission(dest.name, json_text, cv_bytes, cv_name)
+                shutil.rmtree(dest, ignore_errors=True)
+                log.info("flushed pending submission %s", dest.name)
+            except Exception as exc:
+                log.warning("pending %s still not stored: %s", dest.name, str(exc)[:200])
+    finally:
+        _pending_lock.release()
+
+
+def _cleanup_stash() -> None:
+    if not STASH_DIR.exists():
+        return
+    now = time.time()
+    for f in STASH_DIR.iterdir():
+        try:
+            if now - f.stat().st_mtime > STASH_MAX_AGE:
+                f.unlink()
+        except Exception:
+            pass
+
+
+def _background_loop() -> None:
+    while True:
+        time.sleep(RETRY_EVERY)
+        try:
+            flush_pending()
+            _cleanup_stash()
+        except Exception:
+            log.exception("background loop error")
+
+
+if os.environ.get("DISABLE_BACKGROUND") != "1":
+    threading.Thread(target=_background_loop, daemon=True).start()
 
 
 def _safe_count(form) -> int:
@@ -627,15 +802,31 @@ def _safe_count(form) -> int:
 
 
 @app.errorhandler(413)
+@app.errorhandler(RequestEntityTooLarge)
 def too_large(_e):
-    token = issue_csrf()
-    return render_template(
-        "form.html",
-        csrf_token=token,
-        errors=["حجم المرفق أكبر من 10 ميغابايت. ارفع ملفًا أصغر."],
-        form=request.form if request.form else {},
-        project_count=1,
-    ), 413
+    # Never touch request.form here: parsing it would raise 413 again (old 500 bug).
+    log.warning("request too large (%s bytes)", request.content_length)
+    return _render_form(
+        [
+            f"حجم المرفق كبير جدًا. الحد الأقصى للسيرة الذاتية {MAX_CV_MB} ميغابايت.",
+            "إذا ضاعت إجاباتك، ارجع للصفحة السابقة أو افتح الرابط من جديد: إجاباتك محفوظة تلقائيًا على جهازك.",
+        ],
+        413,
+    )
+
+
+@app.errorhandler(500)
+def server_error(_e):
+    log.exception("unhandled error")
+    try:
+        form = request.form
+    except Exception:
+        form = {}
+    return _render_form(
+        ["صار خطأ مؤقت عندنا. إجاباتك محفوظة؛ اضغط «إرسال الطلب» مرة ثانية بعد لحظات."],
+        500,
+        form,
+    )
 
 
 if __name__ == "__main__":

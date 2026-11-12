@@ -230,3 +230,6 @@ input:focus, textarea:focus {
   white-space: nowrap;
 }
 .tech-q textarea { min-height: 120px; }
+
+.invalid { outline: 2px solid #D93025; outline-offset: 3px; border-radius: 10px; }
+#submit-status { margin-top: 10px; }

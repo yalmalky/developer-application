@@ -23,7 +23,8 @@
       <p>شكرًا لاهتمامك بالانضمام لفريقنا. نرجو تعبئة هذا النموذج بدقة وصدق، فهو جزء أساسي من التقييم.</p>
       <ul>
         <li>جميع الأسئلة والحقول مطلوبة، عدا رابطَي LinkedIn و GitHub.</li>
-        <li>إرفاق السيرة الذاتية (PDF أو Word، بحد أقصى 10 ميغابايت) إلزامي.</li>
+        <li>إرفاق السيرة الذاتية (PDF أو Word، بحد أقصى {{ max_cv_mb }} ميغابايت) إلزامي.</li>
+        <li>إجاباتك تُحفظ تلقائيًا على جهازك أثناء التعبئة، فلو انقطع الاتصال أو أُغلقت الصفحة ترجع لك عند فتح الرابط من جديد.</li>
         <li>اكتب تحت كل قسم مثالًا حقيقيًا أو رابطًا لعمل سويته. الأمثلة والروابط أهم عندنا من كلمة «نعم».</li>
         <li>الإجابة بـ «جزئيًا» أو «لا» مقبولة تمامًا، والصدق محل تقدير. وقد نتحقق من الروابط والأعمال المذكورة.</li>
         <li>استخدام أدوات الذكاء الاصطناعي في البرمجة مرحّب به ومتوقّع في هذه الوظيفة.</li>
@@ -36,12 +37,22 @@
       <ul>
         {% for e in errors %}<li>{{ e }}</li>{% endfor %}
       </ul>
-      <p>أعد اختيار ملف السيرة الذاتية قبل إعادة الإرسال.</p>
+      {% if cv_stash %}
+      <p>إجاباتك وسيرتك الذاتية محفوظة. صحّح البنود أعلاه ثم اضغط «إرسال الطلب».</p>
+      {% else %}
+      <p>إجاباتك محفوظة أدناه. صحّح البنود ثم تأكد من إرفاق السيرة الذاتية واضغط «إرسال الطلب».</p>
+      {% endif %}
     </div>
     {% endif %}
+    <div class="alert" role="alert" id="client-errors" hidden>
+      <strong>يلزم إكمال التالي قبل الإرسال:</strong>
+      <ul></ul>
+      <p>إجاباتك محفوظة، ما تحتاج تعيد التعبئة.</p>
+    </div>
 
     <form method="post" action="/" enctype="multipart/form-data" novalidate id="apply-form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="cv_stash" id="cv_stash" value="{{ cv_stash }}">
       <!-- Honeypot fields: must stay empty -->
       <div class="hp" aria-hidden="true">
         <label>موقعك الإلكتروني<input type="text" name="website" tabindex="-1" autocomplete="off"></label>
@@ -75,8 +86,8 @@
             <input type="date" name="start_date" required value="{{ form.get('start_date', '') }}">
           </label>
           <label class="field">
-            <span>السيرة الذاتية * <em>(PDF أو Word، حتى 10 ميغابايت)</em></span>
-            <input type="file" name="cv" id="cv" required accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
+            <span>السيرة الذاتية * <em>(PDF أو Word، حتى {{ max_cv_mb }} ميغابايت)</em></span>
+            <input type="file" name="cv" id="cv" {% if not cv_stash %}required{% endif %} data-max-mb="{{ max_cv_mb }}" data-stash-name="{{ cv_stash_name }}" accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
             <span class="file-name" id="cv-name">لم يُختر ملف بعد</span>
           </label>
           <label class="field">
@@ -276,6 +287,7 @@
         </label>
         <p class="privacy">تُستخدم بياناتك والمرفقات فقط لغرض إجراءات التوظيف لهذه الوظيفة، ولا تُشارك مع أطراف أخرى خارج هذا الغرض.</p>
         <button type="submit" class="btn primary" id="submit-btn">إرسال الطلب</button>
+        <p class="hint" id="submit-status" aria-live="polite"></p>
       </section>
     </form>
 

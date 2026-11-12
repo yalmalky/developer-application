@@ -71,7 +71,7 @@ def save_submission(folder_name: str, json_text: str, cv_bytes: bytes, cv_filena
             f"git@github.com:{repo}.git",
         ]
 
-        for attempt in range(1, 6):
+        for attempt in range(1, 4):
             if work.exists():
                 shutil.rmtree(work, ignore_errors=True)
             remote = remotes[(attempt - 1) % len(remotes)]
@@ -79,7 +79,7 @@ def save_submission(folder_name: str, json_text: str, cv_bytes: bytes, cv_filena
                 r = _run(
                     ["git", "clone", "--depth", "8", "--branch", branch, remote, str(work)],
                     env=env,
-                    timeout=90,
+                    timeout=45,
                 )
                 if r.returncode != 0:
                     last_err = (r.stderr or r.stdout or "clone failed").strip()
@@ -87,7 +87,7 @@ def save_submission(folder_name: str, json_text: str, cv_bytes: bytes, cv_filena
                     continue
 
                 dest = work / "submissions" / folder_name
-                dest.mkdir(parents=True, exist_ok=False)
+                dest.mkdir(parents=True, exist_ok=True)
                 (dest / "application.json").write_text(json_text, encoding="utf-8")
                 (dest / safe_cv).write_bytes(cv_bytes)
 
@@ -99,13 +99,16 @@ def save_submission(folder_name: str, json_text: str, cv_bytes: bytes, cv_filena
                     cwd=str(work),
                     env=env,
                 )
+                if c.returncode != 0 and "nothing to commit" in (c.stdout + c.stderr):
+                    # Identical content already in the repo (an earlier push did land).
+                    return f"{repo}/submissions/{folder_name}"
                 if c.returncode != 0:
                     last_err = (c.stderr or c.stdout or "commit failed").strip()
                     time.sleep(attempt)
                     continue
                 # Rebase in case another submission landed.
-                _run(["git", "pull", "--rebase", "origin", branch], cwd=str(work), env=env, timeout=60)
-                p = _run(["git", "push", "origin", branch], cwd=str(work), env=env, timeout=90)
+                _run(["git", "pull", "--rebase", "origin", branch], cwd=str(work), env=env, timeout=45)
+                p = _run(["git", "push", "origin", branch], cwd=str(work), env=env, timeout=60)
                 if p.returncode != 0:
                     last_err = (p.stderr or p.stdout or "push failed").strip()
                     time.sleep(attempt)
