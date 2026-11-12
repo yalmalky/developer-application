@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import os
 import subprocess
+import shutil
 import tempfile
 import time
 from pathlib import Path
@@ -65,13 +66,15 @@ def save_submission(folder_name: str, json_text: str, cv_bytes: bytes, cv_filena
         key_path.chmod(0o600)
         env = _ssh_env(key_path)
         work = tmp_path / "repo"
-        remote = f"git@github.com:{repo}.git"
+        remotes = [
+            f"ssh://git@ssh.github.com:443/{repo}.git",
+            f"git@github.com:{repo}.git",
+        ]
 
         for attempt in range(1, 6):
             if work.exists():
-                # rmtree and retry a fresh clone
-                import shutil
                 shutil.rmtree(work, ignore_errors=True)
+            remote = remotes[(attempt - 1) % len(remotes)]
             try:
                 r = _run(
                     ["git", "clone", "--depth", "8", "--branch", branch, remote, str(work)],
