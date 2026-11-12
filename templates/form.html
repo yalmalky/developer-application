@@ -192,7 +192,7 @@
           <legend>الراتب الشهري المتوقع (بالريال السعودي) *</legend>
           <div class="pills wrap">
             {% for key, label in salary_ranges %}
-            <label class="pill"><input type="radio" name="salary_range" value="{{ key }}" required {% if form.get('salary_range')==key %}checked{% endif %}> {{ label }}</label>
+            <label class="pill"><input type="radio" name="salary_range" value="{{ key }}" required {% if form.get('salary_range')==key %}checked{% endif %}> {% if "–" in label %}<span dir="ltr">{{ label }}</span>{% else %}{{ label }}{% endif %}</label>
             {% endfor %}
           </div>
         </fieldset>
