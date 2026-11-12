@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="theme-color" content="#1F3A5F">
+  <title>استبيان مهارات المتقدّم — وظيفة مطوّر تطبيقات وأنظمة</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <p class="eyebrow">شركة ناشئة سعودية في التقنية والحلول الطبية والتشغيلية</p>
+      <h1>استبيان مهارات المتقدّم</h1>
+      <p class="subtitle">وظيفة مطوّر تطبيقات وأنظمة — دوام كامل، من المقر أو عن بُعد</p>
+    </header>
+
+    <section class="card intro">
+      <p>شكرًا لاهتمامك بالانضمام لفريقنا. نرجو تعبئة هذا النموذج بدقة وصدق، فهو جزء أساسي من التقييم.</p>
+      <ul>
+        <li>جميع الأسئلة والحقول مطلوبة، عدا رابطَي LinkedIn و GitHub.</li>
+        <li>إرفاق السيرة الذاتية (PDF أو Word، بحد أقصى 10 ميغابايت) إلزامي.</li>
+        <li>اكتب تحت كل قسم مثالًا حقيقيًا أو رابطًا لعمل سويته. الأمثلة والروابط أهم عندنا من كلمة «نعم».</li>
+        <li>الإجابة بـ «جزئيًا» أو «لا» مقبولة تمامًا، والصدق محل تقدير. وقد نتحقق من الروابط والأعمال المذكورة.</li>
+        <li>استخدام أدوات الذكاء الاصطناعي في البرمجة مرحّب به ومتوقّع في هذه الوظيفة.</li>
+      </ul>
+    </section>
+
+    {% if errors %}
+    <div class="alert" role="alert" id="form-errors">
+      <strong>يلزم تصحيح التالي قبل الإرسال:</strong>
+      <ul>
+        {% for e in errors %}<li>{{ e }}</li>{% endfor %}
+      </ul>
+      <p>أعد اختيار ملف السيرة الذاتية قبل إعادة الإرسال.</p>
+    </div>
+    {% endif %}
+
+    <form method="post" action="/" enctype="multipart/form-data" novalidate id="apply-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <!-- Honeypot fields: must stay empty -->
+      <div class="hp" aria-hidden="true">
+        <label>موقعك الإلكتروني<input type="text" name="website" tabindex="-1" autocomplete="off"></label>
+        <label>رقم الفاكس<input type="text" name="fax_number" tabindex="-1" autocomplete="off"></label>
+      </div>
+
+      <section class="card" id="identity">
+        <div class="section-head">
+          <span class="num">البيانات</span>
+          <h2>بيانات المتقدّم</h2>
+        </div>
+        <div class="grid two">
+          <label class="field">
+            <span>الاسم الكامل (كما في السيرة الذاتية) *</span>
+            <input type="text" name="full_name" required autocomplete="name" value="{{ form.get('full_name', '') }}">
+          </label>
+          <label class="field">
+            <span>رقم الجوال *</span>
+            <input type="tel" name="mobile" required autocomplete="tel" inputmode="tel" value="{{ form.get('mobile', '') }}">
+          </label>
+          <label class="field">
+            <span>البريد الإلكتروني *</span>
+            <input type="email" name="email" required autocomplete="email" dir="ltr" value="{{ form.get('email', '') }}">
+          </label>
+          <label class="field">
+            <span>المدينة *</span>
+            <input type="text" name="city" required autocomplete="address-level2" value="{{ form.get('city', '') }}">
+          </label>
+          <label class="field">
+            <span>أقرب تاريخ تقدر تبدأ فيه *</span>
+            <input type="date" name="start_date" required value="{{ form.get('start_date', '') }}">
+          </label>
+          <label class="field">
+            <span>السيرة الذاتية * <em>(PDF أو Word، حتى 10 ميغابايت)</em></span>
+            <input type="file" name="cv" id="cv" required accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
+            <span class="file-name" id="cv-name">لم يُختر ملف بعد</span>
+          </label>
+          <label class="field">
+            <span>رابط LinkedIn <em>(اختياري)</em></span>
+            <input type="url" name="linkedin" dir="ltr" placeholder="https://" value="{{ form.get('linkedin', '') }}">
+          </label>
+          <label class="field">
+            <span>رابط GitHub <em>(اختياري)</em></span>
+            <input type="url" name="github" dir="ltr" placeholder="https://" value="{{ form.get('github', '') }}">
+          </label>
+        </div>
+      </section>
+
+      <section class="card" id="portfolio">
+        <div class="section-head">
+          <span class="num">أولًا</span>
+          <div>
+            <h2>أعمالك وتطبيقاتك المنشورة</h2>
+            <p class="hint">مشروع واحد على الأقل وحتى خمسة. سنراجع الروابط بأنفسنا. إذا كان التطبيق منشورًا باسم شركة أو عميل، اذكر ذلك في الدور والتقنيات.</p>
+          </div>
+        </div>
+        <input type="hidden" name="project_count" id="project_count" value="{{ project_count }}">
+        <div id="projects"></div>
+        <div class="row-actions">
+          <button type="button" class="btn ghost" id="add-project">إضافة مشروع</button>
+          <button type="button" class="btn ghost danger-text" id="remove-project">حذف الأخير</button>
+        </div>
+        <label class="field">
+          <span>اسم حساب المطوّر في المتاجر (Developer Account) *</span>
+          <input type="text" name="developer_account" required placeholder="اكتب «لا يوجد» إن لم يكن لديك" value="{{ form.get('developer_account', '') }}">
+        </label>
+      </section>
+
+      {% for sec in skill_sections if sec.id != 'comms' %}
+      <section class="card skill-sec" id="sec-{{ sec.id }}">
+        <div class="section-head">
+          <span class="num">{{ sec.num }}</span>
+          <div>
+            <h2>{{ sec.title }}</h2>
+            {% if sec.note %}<p class="hint">{{ sec.note }}</p>{% endif %}
+          </div>
+        </div>
+        <div class="skills">
+          {% for key, label in sec.questions %}
+          <fieldset class="skill-row">
+            <legend>{{ label }}</legend>
+            <div class="pills" role="radiogroup">
+              <label class="pill yes"><input type="radio" name="{{ key }}" value="yes" required {% if form.get(key)=='yes' %}checked{% endif %}> نعم</label>
+              <label class="pill mid"><input type="radio" name="{{ key }}" value="partial" {% if form.get(key)=='partial' %}checked{% endif %}> جزئيًا</label>
+              <label class="pill no"><input type="radio" name="{{ key }}" value="no" {% if form.get(key)=='no' %}checked{% endif %}> لا</label>
+            </div>
+          </fieldset>
+          {% endfor %}
+        </div>
+        <label class="field">
+          <span>{{ sec.evidence }} *</span>
+          <textarea name="evidence_{{ sec.id }}" required minlength="{{ min_evidence }}" rows="3">{{ form.get('evidence_' + sec.id, '') }}</textarea>
+        </label>
+      </section>
+      {% endfor %}
+
+      {# Insert support (سادسًا) and work (سابعًا) before comms (ثامنًا) visually:
+         comms is last in skill_sections, so we output support+work before the last skill
+         by splitting in the template via loop index. The list order in Python is
+         apps, ai, cameras, lms, comms — we want support & work after lms. #}
+      <section class="card" id="support">
+        <div class="section-head">
+          <span class="num">سادسًا</span>
+          <div>
+            <h2>الدعم الفني والتواجد</h2>
+            <p class="hint">الوظيفة دوام كامل، ونحتاج المطوّر متاحًا ومتجاوبًا مع أي مشكلة خلال ساعات العمل يوميًا، وليس «حسب الحاجة» أو على المشاريع فقط. العمل من المقر أو عن بُعد كلاهما مقبول.</p>
+          </div>
+        </div>
+        <div class="skills">
+          {% for key, label in support_yesno %}
+          <fieldset class="skill-row">
+            <legend>{{ label }}</legend>
+            <div class="pills" role="radiogroup">
+              <label class="pill yes"><input type="radio" name="{{ key }}" value="yes" required {% if form.get(key)=='yes' %}checked{% endif %}> نعم</label>
+              <label class="pill no"><input type="radio" name="{{ key }}" value="no" {% if form.get(key)=='no' %}checked{% endif %}> لا</label>
+            </div>
+          </fieldset>
+          {% endfor %}
+        </div>
+        <fieldset class="field">
+          <legend>خلال ساعات العمل، أقدر أرد على أي بلاغ خلال *</legend>
+          <div class="pills wrap">
+            {% for key, label in response_times %}
+            <label class="pill"><input type="radio" name="response_time" value="{{ key }}" required {% if form.get('response_time')==key %}checked{% endif %}> {{ label }}</label>
+            {% endfor %}
+          </div>
+        </fieldset>
+        <label class="field">
+          <span>الأوقات أو الأيام التي لا تكون متاحًا فيها * <em>(اكتب «لا يوجد» إن لم توجد)</em></span>
+          <input type="text" name="unavailable" required value="{{ form.get('unavailable', '') }}">
+        </label>
+      </section>
+
+      <section class="card" id="work">
+        <div class="section-head">
+          <span class="num">سابعًا</span>
+          <h2>ترتيبات العمل والتوقعات</h2>
+        </div>
+        <fieldset class="field">
+          <legend>طريقة العمل المفضّلة *</legend>
+          <div class="pills wrap">
+            {% for key, label in work_modes %}
+            <label class="pill"><input type="radio" name="work_mode" value="{{ key }}" required {% if form.get('work_mode')==key %}checked{% endif %}> {{ label }}</label>
+            {% endfor %}
+          </div>
+        </fieldset>
+        <fieldset class="field">
+          <legend>الراتب الشهري المتوقع (بالريال السعودي) *</legend>
+          <div class="pills wrap">
+            {% for key, label in salary_ranges %}
+            <label class="pill"><input type="radio" name="salary_range" value="{{ key }}" required {% if form.get('salary_range')==key %}checked{% endif %}> {{ label }}</label>
+            {% endfor %}
+          </div>
+        </fieldset>
+        <label class="field">
+          <span>الرقم المتوقع بالتحديد (ريال شهريًا) *</span>
+          <input type="number" name="salary_exact" required min="100" max="999999" step="1" inputmode="numeric" value="{{ form.get('salary_exact', '') }}">
+        </label>
+        <fieldset class="field">
+          <legend>السكن *</legend>
+          <div class="pills wrap">
+            {% for key, label in housing_options %}
+            <label class="pill"><input type="radio" name="housing" value="{{ key }}" required {% if form.get('housing')==key %}checked{% endif %}> {{ label }}</label>
+            {% endfor %}
+          </div>
+          <p class="note">ملاحظة: الشركة تستطيع توفير سكن عند الحاجة، ولا يُصرف بدل سكن نقدي.</p>
+        </fieldset>
+      </section>
+
+
+      {% set comms = skill_sections | selectattr('id', 'equalto', 'comms') | list | first %}
+      {% if comms %}
+      <section class="card skill-sec" id="sec-comms">
+        <div class="section-head">
+          <span class="num">{{ comms.num }}</span>
+          <div>
+            <h2>{{ comms.title }}</h2>
+          </div>
+        </div>
+        <div class="skills">
+          {% for key, label in comms.questions %}
+          <fieldset class="skill-row">
+            <legend>{{ label }}</legend>
+            <div class="pills" role="radiogroup">
+              <label class="pill yes"><input type="radio" name="{{ key }}" value="yes" required {% if form.get(key)=='yes' %}checked{% endif %}> نعم</label>
+              <label class="pill mid"><input type="radio" name="{{ key }}" value="partial" {% if form.get(key)=='partial' %}checked{% endif %}> جزئيًا</label>
+              <label class="pill no"><input type="radio" name="{{ key }}" value="no" {% if form.get(key)=='no' %}checked{% endif %}> لا</label>
+            </div>
+          </fieldset>
+          {% endfor %}
+        </div>
+        <label class="field">
+          <span>{{ comms.evidence }} *</span>
+          <textarea name="evidence_{{ comms.id }}" required minlength="{{ min_evidence }}" rows="3">{{ form.get('evidence_' + comms.id, '') }}</textarea>
+        </label>
+      </section>
+      {% endif %}
+
+      <section class="card" id="tech">
+        <div class="section-head">
+          <span class="num">تاسعًا</span>
+          <div>
+            <h2>أسئلة تقنية مفتوحة</h2>
+            <p class="hint">أجب بكلامك وبخطوات واضحة. إجابات عامة مثل «أسويها بسهولة» أو «عندي خبرة» لا تكفي. بضعة أسطر لكل سؤال تكفي إذا كانت محددة.</p>
+          </div>
+        </div>
+        {% for key, label in tech_questions %}
+        <label class="field tech-q">
+          <span>{{ loop.index }}. {{ label }} *</span>
+          <textarea name="{{ key }}" required minlength="{{ min_tech }}" rows="5">{{ form.get(key, '') }}</textarea>
+        </label>
+        {% endfor %}
+      </section>
+
+      <section class="card" id="declare">
+        <label class="declare">
+          <input type="checkbox" name="declaration" value="yes" required {% if form.get('declaration')=='yes' %}checked{% endif %}>
+          <span>أقرّ بأن المعلومات والروابط المذكورة في هذا النموذج صحيحة، وأن دوري في الأعمال المذكورة كما وصفته. *</span>
+        </label>
+        <p class="privacy">تُستخدم بياناتك والمرفقات فقط لغرض إجراءات التوظيف لهذه الوظيفة، ولا تُشارك مع أطراف أخرى خارج هذا الغرض.</p>
+        <button type="submit" class="btn primary" id="submit-btn">إرسال الطلب</button>
+      </section>
+    </form>
+
+    <footer class="foot">جميع الحقول المعلّمة بـ * مطلوبة.</footer>
+  </div>
+
+  <script id="saved-projects" type="application/json">
+    {{ {
+      'count': project_count,
+      'items': []
+    } | tojson }}
+  </script>
+  {# Pass posted project fields to JS via data attributes on a hidden container #}
+  <div id="posted-projects" hidden
+    data-count="{{ project_count }}"
+    {% for i in range(1, 6) %}
+      data-n{{ i }}="{{ form.get('project_' ~ i ~ '_name', '') | e }}"
+      data-l{{ i }}="{{ form.get('project_' ~ i ~ '_link', '') | e }}"
+      data-r{{ i }}="{{ form.get('project_' ~ i ~ '_role', '') | e }}"
+      data-t{{ i }}="{{ form.get('project_' ~ i ~ '_tech', '') | e }}"
+      data-y{{ i }}="{{ form.get('project_' ~ i ~ '_year', '') | e }}"
+      data-v{{ i }}="{{ form.get('project_' ~ i ~ '_live', '') | e }}"
+    {% endfor %}
+  ></div>
+  <script src="{{ url_for('static', filename='form.js') }}"></script>
+</body>
+</html>

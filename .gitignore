@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+.DS_Store
+*.pem
+id_ed25519*
+.pytest_cache/
+*.pyc
